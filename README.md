@@ -53,9 +53,11 @@ Five commands in a small "Visibility Sets" workbench:
 
 Isolate, Transparent others, and Apply set each push the current view state
 onto the restore stack before changing anything, so Restore always has
-somewhere to go.
+somewhere to go. The stack is session-local: it is never written into the
+document, so isolating parts does not dirty the file and no view snapshots
+travel inside a .FCStd you share.
 
-Everything lives in a "Visibility Sets" object in the tree (an
+The named sets live in a "Visibility Sets" object in the tree (an
 `App::FeaturePython` holding two JSON properties). It is plain document
 data: no external files, no preferences database.
 

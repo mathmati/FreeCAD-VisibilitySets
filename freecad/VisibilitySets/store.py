@@ -2,10 +2,11 @@
 """freecad.VisibilitySets.store -- document-side persistence, no GUI.
 
 A manager is an ``App::FeaturePython`` object living in the document,
-holding two JSON String properties (named sets, restore stack) plus the
-stack cap. Because it is App-side, a ``.FCStd`` save/load round-trips
-everything, and the whole module works under ``freecadcmd`` where no
-``ViewObject`` exists. The proxy class below is a shell: the module-level
+holding the named sets as a JSON String property, so a ``.FCStd``
+save/load round-trips them. The restore stack is deliberately NOT stored
+in the document: it is session-local (see the restore-stack section), so
+using Isolate never dirties the file. The whole module works under
+``freecadcmd`` where no ``ViewObject`` exists. The proxy class below is a shell: the module-level
 functions do the work (the proxy delegates, FreeCAD convention), which
 keeps them directly callable from tests and from ``commands.py``.
 """
@@ -121,56 +122,46 @@ def resolve_set(
 
 
 # --- restore stack -------------------------------------------------------------
-def _read_stack(obj) -> List[dict]:
-    data = _load_json(obj.StackJson, "the restore-stack data")
-    if data is None:
-        return []
-    stack = data.get("stack", [])
-    if not isinstance(stack, list):
-        raise core.VisibilitySetError(
-            "the restore-stack data stored in the document is corrupt "
-            "('stack' is %s, expected a list); leaving it untouched"
-            % type(stack).__name__
-        )
-    return list(stack)
+# Session-local, keyed by document name: the stack is working view state,
+# not model data. Persisting it in the document (the old StackJson design)
+# meant every Isolate dirtied the file and shipped up to ten view-state
+# snapshots inside any .FCStd passed to others. A stack now lives only for
+# this FreeCAD session; a reopened document starts with an empty stack.
+# Older documents may still carry a StackJson property on their manager
+# object; it is ignored and never written again.
+_session_stacks: Dict[str, List[dict]] = {}
 
 
-def _write_stack(obj, stack: List[dict]) -> None:
-    obj.StackJson = _dump_json({"version": SCHEMA_VERSION, "stack": stack})
+def _doc_key(doc) -> str:
+    name = getattr(doc, "Name", None)
+    return name if name else str(id(doc))
 
 
-def _cap(obj) -> int:
-    try:
-        cap = int(getattr(obj, "StackCap", DEFAULT_STACK_CAP))
-    except (TypeError, ValueError):
-        cap = DEFAULT_STACK_CAP
-    return max(cap, 1)
-
-
-def push_snapshot(obj, snapshot: Dict[str, object], label: str = "") -> None:
-    """Push a snapshot (bare visibility map or full two-map form), dropping
-    the oldest entries beyond the cap."""
+def push_snapshot(doc, snapshot: Dict[str, object], label: str = "") -> None:
+    """Push a snapshot (bare visibility map or full two-map form) onto the
+    session stack for ``doc``, dropping the oldest entries beyond the cap.
+    Does not touch or dirty the document."""
     entry = core.normalize_snapshot(snapshot)
     entry["label"] = str(label or "")
-    _write_stack(obj, core.push_capped(_read_stack(obj), entry, _cap(obj)))
+    key = _doc_key(doc)
+    _session_stacks[key] = core.push_capped(
+        _session_stacks.get(key, []), entry, DEFAULT_STACK_CAP)
 
 
-def pop_snapshot(obj) -> Optional[dict]:
+def pop_snapshot(doc) -> Optional[dict]:
     """Pop the newest snapshot (full form, with ``label``), or None if empty."""
-    stack = _read_stack(obj)
+    stack = _session_stacks.get(_doc_key(doc), [])
     if not stack:
         return None
-    entry = stack.pop()
-    _write_stack(obj, stack)
-    return entry
+    return stack.pop()
 
 
-def stack_depth(obj) -> int:
-    return len(_read_stack(obj))
+def stack_depth(doc) -> int:
+    return len(_session_stacks.get(_doc_key(doc), []))
 
 
-def clear_stack(obj) -> None:
-    _write_stack(obj, [])
+def clear_stack(doc) -> None:
+    _session_stacks.pop(_doc_key(doc), None)
 
 
 # --- manager object lifecycle ---------------------------------------------------
@@ -181,7 +172,6 @@ def is_manager_object(obj) -> bool:
     return (
         obj.TypeId == "App::FeaturePython"
         and hasattr(obj, "SetsJson")
-        and hasattr(obj, "StackJson")
     )
 
 
@@ -249,18 +239,7 @@ class VisibilitySetsManager(object):
             "App::PropertyString", "SetsJson", "VisibilitySets",
             "Named visibility sets (JSON, managed by the Visibility Sets addon).",
         )
-        obj.addProperty(
-            "App::PropertyString", "StackJson", "VisibilitySets",
-            "Restore stack (JSON, managed by the Visibility Sets addon).",
-        )
-        obj.addProperty(
-            "App::PropertyInteger", "StackCap", "VisibilitySets",
-            "Maximum restore-stack depth.",
-        )
-        obj.StackCap = DEFAULT_STACK_CAP
         obj.setEditorMode("SetsJson", 2)   # hidden from the property editor
-        obj.setEditorMode("StackJson", 2)  # hidden
-        obj.setEditorMode("StackCap", 1)   # read-only
 
     # -- FreeCAD serialisation hooks --
     def dumps(self):
@@ -297,14 +276,14 @@ class VisibilitySetsManager(object):
     def resolve_set(self, obj, name, current_names):
         return resolve_set(obj, name, current_names)
 
-    def push_snapshot(self, obj, snapshot, label=""):
-        return push_snapshot(obj, snapshot, label)
+    def push_snapshot(self, doc, snapshot, label=""):
+        return push_snapshot(doc, snapshot, label)
 
-    def pop_snapshot(self, obj):
-        return pop_snapshot(obj)
+    def pop_snapshot(self, doc):
+        return pop_snapshot(doc)
 
-    def stack_depth(self, obj):
-        return stack_depth(obj)
+    def stack_depth(self, doc):
+        return stack_depth(doc)
 
-    def clear_stack(self, obj):
-        return clear_stack(obj)
+    def clear_stack(self, doc):
+        return clear_stack(doc)

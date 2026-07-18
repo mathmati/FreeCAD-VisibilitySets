@@ -67,7 +67,7 @@ class IsolateCommand(_BaseCommand):
 
     MENU_TEXT = "Isolate selection"
     TOOL_TIP = ("Hide everything except the selected objects. The previous "
-                "view state is pushed onto the document's restore stack.")
+                "view state is pushed onto the session's restore stack.")
 
     def Activated(self):
         doc = App.ActiveDocument
@@ -87,8 +87,7 @@ class IsolateCommand(_BaseCommand):
         except core.VisibilitySetError as exc:
             _status("Visibility Sets: %s" % exc)
             return
-        mgr = store.get_or_create_manager(doc)
-        store.push_snapshot(mgr, snap, label="isolate")
+        store.push_snapshot(doc, snap, label="isolate")
         viewadapter.apply_visibility(vmap, doc)
         _status("Visibility Sets: isolated %d object(s); everything else hidden."
                 % len(selected))
@@ -118,8 +117,7 @@ class TransparentOthersCommand(_BaseCommand):
         except core.VisibilitySetError as exc:
             _status("Visibility Sets: %s" % exc)
             return
-        mgr = store.get_or_create_manager(doc)
-        store.push_snapshot(mgr, snap, label="transparent others")
+        store.push_snapshot(doc, snap, label="transparent others")
         viewadapter.apply_transparency(
             {name: viewadapter.DEFAULT_OTHER_TRANSPARENCY for name in faded},
             doc)
@@ -131,14 +129,13 @@ class RestoreCommand(_BaseCommand):
     """Pop the restore stack, or show everything if it is empty."""
 
     MENU_TEXT = "Restore visibility"
-    TOOL_TIP = ("Restore the previous view state from the document's restore "
+    TOOL_TIP = ("Restore the previous view state from the session's restore "
                 "stack; if the stack is empty, show everything at 0% "
                 "transparency.")
 
     def Activated(self):
         doc = App.ActiveDocument
-        mgr = store.get_manager(doc)
-        entry = store.pop_snapshot(mgr) if mgr is not None else None
+        entry = store.pop_snapshot(doc)
         if entry is not None:
             viewadapter.apply_snapshot(entry, doc)
             _status("Visibility Sets: restored previous state (%s)."
@@ -209,7 +206,7 @@ class ApplySetCommand(_BaseCommand):
         except core.VisibilitySetError as exc:
             _status("Visibility Sets: %s" % exc)
             return
-        store.push_snapshot(mgr, viewadapter.snapshot(doc),
+        store.push_snapshot(doc, viewadapter.snapshot(doc),
                             label="apply set: %s" % self.set_name)
         viewadapter.apply_visibility(vmap, doc)
         msg = "Visibility Sets: applied set '%s'." % self.set_name

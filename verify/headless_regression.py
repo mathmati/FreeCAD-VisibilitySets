@@ -218,16 +218,16 @@ def c10(fx):
 
 @check("store: restore stack is LIFO and snapshots normalize to the full form")
 def c11(fx):
-    store.push_snapshot(fx.mgr, {"Widget": True}, label="first")
-    store.push_snapshot(fx.mgr,
+    store.push_snapshot(fx.doc1, {"Widget": True}, label="first")
+    store.push_snapshot(fx.doc1,
                         {"visibility": {"Widget": False},
                          "transparency": {"Widget": 80}},
                         label="second")
-    top = store.pop_snapshot(fx.mgr)
+    top = store.pop_snapshot(fx.doc1)
     ok(top["label"] == "second", "popped %r first" % top["label"])
     ok(top["visibility"] == {"Widget": False} and top["transparency"] == {"Widget": 80},
        "full-form snapshot mangled: %r" % top)
-    nxt = store.pop_snapshot(fx.mgr)
+    nxt = store.pop_snapshot(fx.doc1)
     ok(nxt["label"] == "first" and nxt["transparency"] == {},
        "bare map did not normalize: %r" % nxt)
 
@@ -235,11 +235,11 @@ def c11(fx):
 @check("store: stack capped at 10 over 12 pushes, popping newest first")
 def c12(fx):
     for i in range(1, 13):
-        store.push_snapshot(fx.mgr, {"Widget": True}, label="s%d" % i)
-    ok(store.stack_depth(fx.mgr) == 10, "depth is %d" % store.stack_depth(fx.mgr))
+        store.push_snapshot(fx.doc1, {"Widget": True}, label="s%d" % i)
+    ok(store.stack_depth(fx.doc1) == 10, "depth is %d" % store.stack_depth(fx.doc1))
     labels = []
     while True:
-        entry = store.pop_snapshot(fx.mgr)
+        entry = store.pop_snapshot(fx.doc1)
         if entry is None:
             break
         labels.append(entry["label"])
@@ -249,8 +249,8 @@ def c12(fx):
 
 @check("store: popping an empty stack returns None")
 def c13(fx):
-    ok(store.stack_depth(fx.mgr) == 0, "stack not drained before this check")
-    ok(store.pop_snapshot(fx.mgr) is None, "empty pop not None")
+    ok(store.stack_depth(fx.doc1) == 0, "stack not drained before this check")
+    ok(store.pop_snapshot(fx.doc1) is None, "empty pop not None")
 
 
 @check("store: corrupt JSON in the document raises a clear error, not a raw one")
@@ -279,7 +279,6 @@ def c15(fx):
 @check("store: valid JSON of the wrong shape raises the corrupt-data error, not a raw one")
 def c15b(fx):
     stash_sets = fx.mgr.SetsJson
-    stash_stack = fx.mgr.StackJson
     try:
         fx.mgr.SetsJson = "[1, 2]"
         raises(core.VisibilitySetError,
@@ -290,12 +289,8 @@ def c15b(fx):
         fx.mgr.SetsJson = '{"version": 1, "sets": {"weird": {}}}'
         raises(core.VisibilitySetError,
                lambda: store.get_set(fx.mgr, "weird"), "corrupt")
-        fx.mgr.StackJson = '"hello"'
-        raises(core.VisibilitySetError,
-               lambda: store.stack_depth(fx.mgr), "corrupt")
     finally:
         fx.mgr.SetsJson = stash_sets
-        fx.mgr.StackJson = stash_stack
     ok(store.get_set(fx.mgr, "alpha") == {"Widget": False},
        "sets data did not survive the shape-guard check")
 
@@ -325,13 +320,13 @@ def c15c(fx):
 
 
 # --- 20-21: .FCStd persistence -------------------------------------------------
-@check("fcstd: sets, stack, and the proxy class survive save/close/reopen")
+@check("fcstd: sets and the proxy survive reopen; the stack stays session-local")
 def c16(fx):
     mgr2 = store.get_or_create_manager(fx.doc2)
     saved = {"Assembly": True, "Ball": False, "Bracket": True, "Pin": False}
     store.save_set(mgr2, "fasteners", saved)
-    store.push_snapshot(mgr2, {"Assembly": True}, label="before save 1")
-    store.push_snapshot(mgr2, {"Assembly": False}, label="before save 2")
+    store.push_snapshot(fx.doc2, {"Assembly": True}, label="before save 1")
+    store.push_snapshot(fx.doc2, {"Assembly": False}, label="before save 2")
 
     os.makedirs(_TMP_DIR, exist_ok=True)
     fx.path = os.path.join(_TMP_DIR, "visibilitysets_roundtrip.FCStd")
@@ -348,11 +343,14 @@ def c16(fx):
        "proxy class did not restore (got %r)" % type(mgr2.Proxy))
     ok(store.get_set(mgr2, "fasteners") == saved,
        "set mangled by round-trip: %r" % store.get_set(mgr2, "fasteners"))
-    ok(store.stack_depth(mgr2) == 2,
-       "stack depth after reload: %d" % store.stack_depth(mgr2))
-    top = store.pop_snapshot(mgr2)
-    ok(top["label"] == "before save 2", "stack order broke on reload: %r" % top)
-    ok(store.stack_depth(mgr2) == 1, "pop on restored stack failed")
+    # the stack is session-local and never stored: nothing leaked into the
+    # file, and the reopened document starts with an empty stack (its
+    # pre-close session stack belongs to the closed document object)
+    ok(not hasattr(mgr2, "StackJson") or not mgr2.StackJson,
+       "restore stack leaked into the document file")
+    ok(store.stack_depth(fx.doc2) == 0,
+       "reopened document did not start with an empty stack: %d"
+       % store.stack_depth(fx.doc2))
     fx.mgr2 = mgr2
 
 
