@@ -1,0 +1,20 @@
+[ ok   1] core.isolate: selected stay visible, everything else hidden
+[ ok   2] core.isolate: an empty selection is an error, not 'hide everything'
+[ ok   3] core.isolate: a selected name not in the document is an error
+[ ok   4] core.others: sorted complement of the selection, unknown names error
+[ ok   5] core.validate_map: vanished names dropped and reported, never an error
+[ ok   6] core.push_capped: stack never exceeds the cap, oldest dropped first
+[ ok   7] store: one manager per document; collect_names excludes it
+[ ok   8] store: save_set/get_set round-trip; list_sets is sorted
+[ ok   9] store: saving over an existing name overwrites it (update in CRUD)
+[ ok  10] store: delete_set reports True/False honestly; get_set then returns None
+[ ok  11] store: restore stack is LIFO and snapshots normalize to the full form
+[ ok  12] store: stack capped at 10 over 12 pushes, popping newest first
+[ ok  13] store: popping an empty stack returns None
+[ ok  14] store: corrupt JSON in the document raises a clear error, not a raw one
+[ ok  15] store: resolve_set on a missing set (and a blank set name) errors clearly
+[ ok  16] fcstd: sets, stack, and the proxy class survive save/close/reopen
+[ ok  17] fcstd: after reload, an object deleted since the set was saved is dropped and reported
+----------------------------------------------------------------
+17/17 checks pass
+SYSTEM_EXIT code=0
