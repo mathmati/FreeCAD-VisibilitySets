@@ -16,7 +16,9 @@ solid), then drives the REAL command classes the toolbar buttons invoke,
 with the real Gui.Selection API for picks:
 
   1. Isolate: select Bracket, IsolateCommand().Activated() -> assert every
-     other object's ViewObject.Visibility is False; screenshot.
+     other object's ViewObject.Visibility is False, except the Assembly
+     container holding Bracket, which must stay visible (hiding an
+     App::Part hides its whole subtree); screenshot.
   2. Restore: RestoreCommand().Activated() -> assert the stack entry brought
      the pre-isolate state back (all visible); screenshot.
   3. Transparent others: select Pin, TransparentOthersCommand().Activated()
@@ -115,7 +117,9 @@ def main():
         IsolateCommand().Activated()
         pump()
         assert visibility(doc, "Bracket"), "Bracket not visible after isolate"
-        for name in ("Assembly", "Pin", "Ball"):
+        assert visibility(doc, "Assembly"), \
+            "Assembly (the selection's container) must stay visible"
+        for name in ("Pin", "Ball"):
             assert not visibility(doc, name), "%s still visible" % name
         shot("vis_isolate.png")
 

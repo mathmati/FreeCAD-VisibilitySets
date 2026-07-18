@@ -27,12 +27,18 @@ def _load_json(raw: str, what: str):
     if not raw:
         return None
     try:
-        return json.loads(raw)
+        data = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise core.VisibilitySetError(
             "%s stored in the document is corrupt (%s); leaving it untouched"
             % (what, exc)
         )
+    if not isinstance(data, dict):
+        raise core.VisibilitySetError(
+            "%s stored in the document is corrupt (top level is %s, expected "
+            "an object); leaving it untouched" % (what, type(data).__name__)
+        )
+    return data
 
 
 def _dump_json(data) -> str:
@@ -51,7 +57,15 @@ def _clean_name(name: str) -> str:
 # --- named sets (CRUD) --------------------------------------------------------
 def _read_sets(obj) -> Dict[str, dict]:
     data = _load_json(obj.SetsJson, "the named-sets data")
-    return {} if data is None else dict(data.get("sets", {}))
+    if data is None:
+        return {}
+    sets = data.get("sets", {})
+    if not isinstance(sets, dict):
+        raise core.VisibilitySetError(
+            "the named-sets data stored in the document is corrupt ('sets' is "
+            "%s, expected an object); leaving it untouched" % type(sets).__name__
+        )
+    return dict(sets)
 
 
 def _write_sets(obj, sets: Dict[str, dict]) -> None:
@@ -71,7 +85,14 @@ def save_set(obj, name: str, visibility_map: Dict[str, bool]) -> None:
 def get_set(obj, name: str) -> Optional[core.VisibilityMap]:
     """The stored visibility map, or None if no set has that name."""
     entry = _read_sets(obj).get(name)
-    return None if entry is None else dict(entry["visibility"])
+    if entry is None:
+        return None
+    if not isinstance(entry, dict) or not isinstance(entry.get("visibility"), dict):
+        raise core.VisibilitySetError(
+            "the named-sets data stored in the document is corrupt (set %r "
+            "has no visibility map); leaving it untouched" % name
+        )
+    return dict(entry["visibility"])
 
 
 def list_sets(obj) -> List[str]:
@@ -102,7 +123,16 @@ def resolve_set(
 # --- restore stack -------------------------------------------------------------
 def _read_stack(obj) -> List[dict]:
     data = _load_json(obj.StackJson, "the restore-stack data")
-    return [] if data is None else list(data.get("stack", []))
+    if data is None:
+        return []
+    stack = data.get("stack", [])
+    if not isinstance(stack, list):
+        raise core.VisibilitySetError(
+            "the restore-stack data stored in the document is corrupt "
+            "('stack' is %s, expected a list); leaving it untouched"
+            % type(stack).__name__
+        )
+    return list(stack)
 
 
 def _write_stack(obj, stack: List[dict]) -> None:
@@ -171,6 +201,30 @@ def get_or_create_manager(doc):
         mgr.Label = "Visibility Sets"
         VisibilitySetsManager(mgr)
     return mgr
+
+
+def parent_map(doc) -> Dict[str, str]:
+    """name -> immediate container name, for every object sitting inside an
+    ``App::Part`` / Body (getParentGeoFeatureGroup) or a plain group
+    (getParentGroup). Top-level objects are absent. Feeds the
+    container-aware ``core.isolate_nested`` / ``core.others_nested``."""
+    out: Dict[str, str] = {}
+    for obj in doc.Objects:
+        if is_manager_object(obj):
+            continue
+        parent = None
+        try:
+            parent = obj.getParentGeoFeatureGroup()
+        except Exception:
+            parent = None
+        if parent is None:
+            try:
+                parent = obj.getParentGroup()
+            except Exception:
+                parent = None
+        if parent is not None and parent.Name != obj.Name:
+            out[obj.Name] = parent.Name
+    return out
 
 
 def collect_names(doc) -> List[str]:

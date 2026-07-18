@@ -100,8 +100,10 @@ def fade_others(
 ) -> List[str]:
     """Transparent-others mode: fade the complement of the selection to
     ``value`` percent. Visibility is untouched (faded objects stay visible);
-    the selection keeps its own transparency. Returns the faded names."""
+    the selection, its ancestor containers, and the contents of selected
+    containers keep their own transparency. Returns the faded names."""
     doc = _doc(doc)
-    faded = core.others(selected_names, current_names(doc))
+    faded = core.others_nested(
+        selected_names, current_names(doc), store.parent_map(doc))
     apply_transparency({name: value for name in faded}, doc)
     return faded

@@ -34,8 +34,13 @@ tree, and that is all. No sets, no stack, no fade-the-rest.
 Five commands in a small "Visibility Sets" workbench:
 
 1. **Isolate selection**: hide everything except the selected objects.
+   Containers are respected: the container chain above a selected object
+   stays visible (hiding an `App::Part`, Body, or group hides its whole
+   subtree), and the contents of a selected container keep their current
+   state.
 2. **Transparent others**: fade everything except the selection to 80%
-   transparency instead of hiding it.
+   transparency instead of hiding it. The selection's containers and the
+   contents of a selected container are not faded.
 3. **Restore visibility**: pop the previous view state off the restore
    stack (newest first, capped at 10); if the stack is empty, show
    everything at 0% transparency.
@@ -75,13 +80,15 @@ layout, everything except the final property writes runs headless.
 Built and verified against a real installed FreeCAD 1.1.1
 (1.1.1R20260414, bundled Python 3.11.14) on Windows 11:
 
-- **Headless (`freecadcmd`)**: `verify/headless_regression.py` runs 17
-  checks: the algebra (isolate/others/validate/cap), named-set CRUD,
-  restore-stack LIFO order and the 10-entry cap, the corrupt-JSON guard,
-  and a .FCStd round-trip (objects plus manager saved, closed, reopened;
-  the set still applies, the stack still pops, and an object deleted after
-  the set was saved is dropped with a reported list). **17/17 checks
-  pass**; run log: `verify/out-headless.txt`. Two freecadcmd quirks shaped
+- **Headless (`freecadcmd`)**: `verify/headless_regression.py` runs 21
+  checks: the algebra (isolate/others/validate/cap, including the
+  container-aware variants), named-set CRUD, restore-stack LIFO order and
+  the 10-entry cap, the corrupt-JSON and wrong-shape guards, parent_map on
+  a real document, and a .FCStd round-trip (objects plus manager saved,
+  closed, reopened; the set still applies, the stack still pops, and an
+  object deleted after the set was saved is dropped with a reported list).
+  **21/21 checks pass** (latest run: FreeCAD 1.1.0, Linux); run log:
+  `verify/out-headless.txt`. Two freecadcmd quirks shaped
   the run (scripts do not get `__name__ == "__main__"`, and print() output
   is unreliable); the wrapper that works around them is in
   `verify/README.md`.

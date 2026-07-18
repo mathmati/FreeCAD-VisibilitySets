@@ -52,6 +52,80 @@ def others(selected_names: Iterable[str], all_names: Iterable[str]) -> List[str]
     return sorted(set(all_names) - set(selected_names))
 
 
+def _ancestors(name: str, parents: Dict[str, str]) -> List[str]:
+    """Chain of containers above ``name`` per the ``parents`` map (immediate
+    container first). Tolerates cycles: each container is visited once."""
+    chain = []
+    seen = set()
+    cur = parents.get(name)
+    while cur is not None and cur not in seen:
+        chain.append(cur)
+        seen.add(cur)
+        cur = parents.get(cur)
+    return chain
+
+
+def isolate_nested(
+    selected_names: Iterable[str],
+    all_names: Iterable[str],
+    parents: Dict[str, str],
+    current_visibility: Dict[str, bool] = None,
+) -> VisibilityMap:
+    """Container-aware isolate: show the selection, hide the rest.
+
+    ``parents`` maps an object name to the name of its immediate container;
+    top-level names are absent (see ``store.parent_map``). Hiding an
+    ``App::Part``, Body, or group hides its whole subtree in the 3D view,
+    so two refinements over plain ``isolate``: every ancestor container of
+    a selected object stays visible (otherwise the selection itself would
+    disappear), and objects inside a selected container keep their current
+    visibility from ``current_visibility`` (default visible) instead of
+    being force-hidden.
+    """
+    selected = list(selected_names)
+    if not selected:
+        raise VisibilitySetError("isolate needs at least one selected object")
+    all_names = list(all_names)
+    _check_known(selected, all_names, "the selection")
+    selset = set(selected)
+    keep = set(selected)
+    for name in selected:
+        keep.update(_ancestors(name, parents))
+    current = dict(current_visibility or {})
+    vmap = {}
+    for name in all_names:
+        if name in keep:
+            vmap[name] = True
+        elif any(a in selset for a in _ancestors(name, parents)):
+            vmap[name] = bool(current.get(name, True))
+        else:
+            vmap[name] = False
+    return vmap
+
+
+def others_nested(
+    selected_names: Iterable[str],
+    all_names: Iterable[str],
+    parents: Dict[str, str],
+) -> List[str]:
+    """Container-aware complement for transparent-others mode: ``others``
+    minus the selection's ancestor containers and minus the contents of
+    selected containers (fading either would fade the selection itself)."""
+    selected = list(selected_names)
+    all_names = list(all_names)
+    _check_known(selected, all_names, "the selection")
+    selset = set(selected)
+    excluded = set(selected)
+    for name in selected:
+        excluded.update(_ancestors(name, parents))
+    return sorted(
+        name
+        for name in all_names
+        if name not in excluded
+        and not any(a in selset for a in _ancestors(name, parents))
+    )
+
+
 def show_all(all_names: Iterable[str]) -> VisibilityMap:
     """Everything visible."""
     return {name: True for name in all_names}

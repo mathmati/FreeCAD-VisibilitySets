@@ -1,5 +1,7 @@
-# VERIFIED 2026-07-18: 17/17 checks pass on FreeCAD 1.1.1 (1.1.1R20260414),
-# bundled Python 3.11.14, Windows 11. Run log: verify/out-headless.txt.
+# VERIFIED 2026-07-18: 21/21 checks pass on FreeCAD 1.1.0 (Linux, conda
+# build); the earlier 17-check version also passed on FreeCAD 1.1.1
+# (1.1.1R20260414), bundled Python 3.11.14, Windows 11. Run log:
+# verify/out-headless.txt.
 # SPDX-License-Identifier: MIT
 """verify/headless_regression.py -- Visibility Sets headless regression.
 
@@ -13,17 +15,21 @@ is in verify/README.md). The log lands in ``verify/out-headless.txt``.
 What this covers (everything except the GUI translation layer, which cannot
 exist without a GUI; see verify/drivers/visibility_driver.py, UNVERIFIED):
 
-   core algebra   1-6    isolate / others / validate_map / push_capped
-   store, 1 doc   7-15   manager singleton, named-set CRUD, restore stack
+   core algebra   1-8    isolate / others / validate_map / push_capped,
+                         plus the container-aware isolate_nested /
+                         others_nested
+   store, 1 doc   9-17   manager singleton, named-set CRUD, restore stack
                          (LIFO, cap 10, empty pop), corrupt-JSON guard,
                          resolve_set errors
-   .FCStd         16-17  sets + stack + proxy class survive
+   store, shapes  18-19  wrong-shape JSON guard, parent_map on a real
+                         document (App::Part chain plus a plain group)
+   .FCStd         20-21  sets + stack + proxy class survive
                          saveAs/close/openDocument, and a set referencing
                          an object deleted after saving drops it with a
                          reported list instead of failing
 
-Checks 7-15 share one document and one manager on purpose (they read as one
-continuous session, exactly like a user's); checks 16-17 use a second
+Checks 9-17 share one document and one manager on purpose (they read as one
+continuous session, exactly like a user's); checks 20-21 use a second
 document that is saved, closed, and reopened.
 """
 import os
@@ -45,7 +51,7 @@ import Part  # noqa: E402  # makes Part::* types creatable
 
 from freecad.VisibilitySets import core, store  # noqa: E402
 
-EXPECTED_CHECKS = 17
+EXPECTED_CHECKS = 21
 
 _checks = []
 
@@ -142,7 +148,40 @@ def c06(fx):
     ok(core.push_capped([{"n": 1}], {"n": 2}, 0) == [], "cap 0 keeps entries")
 
 
-# --- 7-15: store on one live document -----------------------------------------
+@check("core.isolate_nested: ancestors stay visible, selected container's contents keep state")
+def c06b(fx):
+    parents = {"Sub": "Asm", "Box": "Sub", "Pin": "Asm"}
+    all_names = ["Asm", "Sub", "Box", "Pin", "Loose"]
+    # Selecting a deep child keeps its whole container chain visible.
+    vmap = core.isolate_nested(["Box"], all_names, parents, {"Loose": True})
+    ok(vmap == {"Asm": True, "Sub": True, "Box": True,
+                "Pin": False, "Loose": False},
+       "deep-child isolate map: %r" % vmap)
+    # Selecting a container preserves its contents' current visibility
+    # (a hidden child stays hidden), so container round-trips hold.
+    vmap = core.isolate_nested(["Sub"], all_names, parents, {"Box": False})
+    ok(vmap == {"Asm": True, "Sub": True, "Box": False,
+                "Pin": False, "Loose": False},
+       "container isolate map: %r" % vmap)
+    raises(core.VisibilitySetError,
+           lambda: core.isolate_nested([], all_names, parents), "at least one")
+
+
+@check("core.others_nested: complement excludes the selection's containers and contents")
+def c06c(fx):
+    parents = {"Sub": "Asm", "Box": "Sub", "Pin": "Asm"}
+    all_names = ["Asm", "Sub", "Box", "Pin", "Loose"]
+    ok(core.others_nested(["Box"], all_names, parents) == ["Loose", "Pin"],
+       "deep-child complement: %r"
+       % core.others_nested(["Box"], all_names, parents))
+    ok(core.others_nested(["Sub"], all_names, parents) == ["Loose", "Pin"],
+       "container complement: %r"
+       % core.others_nested(["Sub"], all_names, parents))
+    raises(core.VisibilitySetError,
+           lambda: core.others_nested(["Ghost"], all_names, parents), "Ghost")
+
+
+# --- 9-17: store on one live document -----------------------------------------
 @check("store: one manager per document; collect_names excludes it")
 def c07(fx):
     again = store.get_or_create_manager(fx.doc1)
@@ -237,7 +276,55 @@ def c15(fx):
            "non-empty name")
 
 
-# --- 16-17: .FCStd persistence -------------------------------------------------
+@check("store: valid JSON of the wrong shape raises the corrupt-data error, not a raw one")
+def c15b(fx):
+    stash_sets = fx.mgr.SetsJson
+    stash_stack = fx.mgr.StackJson
+    try:
+        fx.mgr.SetsJson = "[1, 2]"
+        raises(core.VisibilitySetError,
+               lambda: store.get_set(fx.mgr, "alpha"), "corrupt")
+        fx.mgr.SetsJson = '{"version": 1, "sets": []}'
+        raises(core.VisibilitySetError,
+               lambda: store.list_sets(fx.mgr), "corrupt")
+        fx.mgr.SetsJson = '{"version": 1, "sets": {"weird": {}}}'
+        raises(core.VisibilitySetError,
+               lambda: store.get_set(fx.mgr, "weird"), "corrupt")
+        fx.mgr.StackJson = '"hello"'
+        raises(core.VisibilitySetError,
+               lambda: store.stack_depth(fx.mgr), "corrupt")
+    finally:
+        fx.mgr.SetsJson = stash_sets
+        fx.mgr.StackJson = stash_stack
+    ok(store.get_set(fx.mgr, "alpha") == {"Widget": False},
+       "sets data did not survive the shape-guard check")
+
+
+@check("store.parent_map: App::Part chains and plain groups on a real document")
+def c15c(fx):
+    doc = App.newDocument("VisSetsParents")
+    try:
+        asm = doc.addObject("App::Part", "Asm")
+        sub = doc.addObject("App::Part", "Sub")
+        box = doc.addObject("Part::Box", "Box")
+        grp = doc.addObject("App::DocumentObjectGroup", "Grp")
+        ball = doc.addObject("Part::Sphere", "Ball")
+        doc.addObject("Part::Box", "Loose")
+        asm.addObject(sub)
+        sub.addObject(box)
+        grp.addObject(ball)
+        pm = store.parent_map(doc)
+        # App::Part auto-creates Origin/axis/plane children; they map to
+        # their Part too, but only the objects this check placed matter.
+        placed = {k: v for k, v in pm.items()
+                  if k in ("Asm", "Sub", "Box", "Grp", "Ball", "Loose")}
+        ok(placed == {"Sub": "Asm", "Box": "Sub", "Ball": "Grp"},
+           "parent_map: %r" % placed)
+    finally:
+        App.closeDocument(doc.Name)
+
+
+# --- 20-21: .FCStd persistence -------------------------------------------------
 @check("fcstd: sets, stack, and the proxy class survive save/close/reopen")
 def c16(fx):
     mgr2 = store.get_or_create_manager(fx.doc2)
@@ -315,5 +402,11 @@ def main():
     return 0
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+# Not guarded by __name__ == "__main__": stock freecadcmd (for example the
+# conda-forge 1.1.0 build) does not set __name__ that way, so a guarded
+# harness silently runs zero checks and still exits 0. Run unconditionally;
+# os._exit propagates the code without tripping freecadcmd's SystemExit
+# handling, and the flush beats freecadcmd's buffered stdout.
+rc = main()
+sys.stdout.flush()
+os._exit(rc)

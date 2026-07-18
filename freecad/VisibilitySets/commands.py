@@ -75,13 +75,20 @@ class IsolateCommand(_BaseCommand):
         if not selected:
             _status("Visibility Sets: select one or more objects to isolate first.")
             return
+        snap = viewadapter.snapshot(doc)
         try:
-            vmap = core.isolate(selected, viewadapter.current_names(doc))
+            # Container-aware: ancestor containers of the selection stay
+            # visible (hiding an App::Part/Body/group hides its whole
+            # subtree in the 3D view), and the contents of a selected
+            # container keep their current state.
+            vmap = core.isolate_nested(
+                selected, viewadapter.current_names(doc),
+                store.parent_map(doc), snap["visibility"])
         except core.VisibilitySetError as exc:
             _status("Visibility Sets: %s" % exc)
             return
         mgr = store.get_or_create_manager(doc)
-        store.push_snapshot(mgr, viewadapter.snapshot(doc), label="isolate")
+        store.push_snapshot(mgr, snap, label="isolate")
         viewadapter.apply_visibility(vmap, doc)
         _status("Visibility Sets: isolated %d object(s); everything else hidden."
                 % len(selected))
@@ -101,10 +108,21 @@ class TransparentOthersCommand(_BaseCommand):
         if not selected:
             _status("Visibility Sets: select one or more objects first.")
             return
+        snap = viewadapter.snapshot(doc)
+        try:
+            # Computed before the snapshot is pushed so a bad selection
+            # leaves the restore stack untouched. Container-aware for the
+            # same reason as Isolate.
+            faded = core.others_nested(
+                selected, viewadapter.current_names(doc), store.parent_map(doc))
+        except core.VisibilitySetError as exc:
+            _status("Visibility Sets: %s" % exc)
+            return
         mgr = store.get_or_create_manager(doc)
-        store.push_snapshot(mgr, viewadapter.snapshot(doc),
-                            label="transparent others")
-        faded = viewadapter.fade_others(selected, doc=doc)
+        store.push_snapshot(mgr, snap, label="transparent others")
+        viewadapter.apply_transparency(
+            {name: viewadapter.DEFAULT_OTHER_TRANSPARENCY for name in faded},
+            doc)
         _status("Visibility Sets: faded %d object(s) to %d%% transparency."
                 % (len(faded), viewadapter.DEFAULT_OTHER_TRANSPARENCY))
 
@@ -142,7 +160,6 @@ class SaveSetCommand(_BaseCommand):
 
     def Activated(self):
         doc = App.ActiveDocument
-        mgr = store.get_or_create_manager(doc)
         name, ok = QtWidgets.QInputDialog.getText(
             Gui.getMainWindow(), "Save visibility set",
             "Name for the current visibility state:")
@@ -152,8 +169,11 @@ class SaveSetCommand(_BaseCommand):
         if not name:
             return
         snap = viewadapter.snapshot(doc)
+        # The manager is created inside the transaction so undoing the save
+        # also removes a manager that only exists because of it.
         doc.openTransaction("Save visibility set")
         try:
+            mgr = store.get_or_create_manager(doc)
             store.save_set(mgr, name, snap["visibility"])
         except Exception:
             doc.abortTransaction()
@@ -206,8 +226,11 @@ _workbench = None     # set by init_gui on Initialize/Activated
 
 
 def _command_name_for(set_name):
+    # ASCII-only command names: FreeCAD command identifiers end up in menu
+    # and shortcut machinery, so non-ASCII set-name characters (which
+    # str.isalnum() would accept) are flattened to "_" as well.
     base = "VisibilitySets_ApplySet_" + "".join(
-        c if c.isalnum() else "_" for c in set_name)
+        c if (c.isascii() and c.isalnum()) else "_" for c in set_name)
     name, n = base, 2
     taken = set(_apply_commands.values())
     while name in taken:
